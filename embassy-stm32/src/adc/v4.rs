@@ -17,6 +17,9 @@ pub const VREF_DEFAULT_MV: u32 = 3300;
 pub const VREF_CALIB_MV: u32 = 3300;
 
 /// Max single ADC operation clock frequency
+/// TODO(chudsaviet): Verify max C0 ADC clock frequency. Derived from RCC, could be wrong.
+#[cfg(stm32c0)]
+const MAX_ADC_CLK_FREQ: Hertz = Hertz::mhz(48);
 #[cfg(stm32g4)]
 const MAX_ADC_CLK_FREQ: Hertz = Hertz::mhz(60);
 #[cfg(stm32h7)]
@@ -191,6 +194,7 @@ impl<'d, T: Instance> Adc<'d, T> {
             sample_time: SampleTime::from_bits(0),
         };
         s.power_up();
+        #[cfg(not(stm32c0))]
         s.configure_differential_inputs();
 
         s.calibrate();
@@ -204,6 +208,7 @@ impl<'d, T: Instance> Adc<'d, T> {
 
     fn power_up(&mut self) {
         T::regs().cr().modify(|reg| {
+            #[cfg(not(stm32c0))]
             reg.set_deeppwd(false);
             reg.set_advregen(true);
         });
@@ -211,6 +216,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         blocking_delay_us(10);
     }
 
+    #[cfg(not(stm32c0))]
     fn configure_differential_inputs(&mut self) {
         T::regs().difsel().modify(|w| {
             for n in 0..20 {
@@ -220,6 +226,7 @@ impl<'d, T: Instance> Adc<'d, T> {
     }
 
     fn calibrate(&mut self) {
+        #[cfg(not(stm32c0))]
         T::regs().cr().modify(|w| {
             #[cfg(not(adc_u5))]
             w.set_adcaldif(Adcaldif::SINGLE_ENDED);
