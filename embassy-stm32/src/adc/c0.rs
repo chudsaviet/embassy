@@ -1,11 +1,11 @@
 use pac::adc::vals::Scandir;
 #[allow(unused)]
-use pac::adc::vals::{Adstp, Dmacfg, Exten};
+use pac::adc::vals::{Adstp, Dmacfg, Exten, Ovsr};
 use pac::adccommon::vals::Presc;
 
 use super::{blocking_delay_us, Adc, AdcChannel, Instance, Resolution, RxDma, SealedAdcChannel};
 use crate::dma::Transfer;
-use crate::{pac, rcc, Peripheral};
+use crate::{pac, Peripheral};
 
 /// Default VREF voltage used for sample conversion to millivolts.
 pub const VREF_DEFAULT_MV: u32 = 3300;
@@ -35,10 +35,6 @@ impl<T: Instance> SealedAdcChannel<T> for Temperature {
         TEMP_CHANNEL
     }
 }
-
-// NOTE (unused): The prescaler enum closely copies the hardware capabilities,
-// but high prescaling doesn't make a lot of sense in the current implementation and is ommited.
-#[allow(unused)]
 enum Prescaler {
     NotDivided,
     DividedBy2,
@@ -91,6 +87,8 @@ impl Prescaler {
 }
 
 /// Number of samples used for averaging.
+/// TODO: Implement hardware averaging setting.
+#[allow(unused)]
 pub enum Averaging {
     Disabled,
     Samples2,
@@ -109,7 +107,6 @@ impl<'d, T: Instance> Adc<'d, T> {
     /// Create a new ADC driver.
     pub fn new(adc: impl Peripheral<P = T> + 'd) -> Self {
         embassy_hal_internal::into_ref!(adc);
-        rcc::enable_and_reset::<T>();
 
         T::common_regs()
             .ccr()
@@ -176,29 +173,6 @@ impl<'d, T: Instance> Adc<'d, T> {
     /// Set the ADC resolution.
     pub fn set_resolution(&mut self, resolution: Resolution) {
         T::regs().cfgr1().modify(|reg| reg.set_res(resolution.into()));
-    }
-
-    /// Set hardware averaging.
-    pub fn set_averaging(&mut self, averaging: Averaging) {
-        let (enable, samples, right_shift) = match averaging {
-            Averaging::Disabled => (false, 0, 0),
-            Averaging::Samples2 => (true, 1, 1),
-            Averaging::Samples4 => (true, 3, 2),
-            Averaging::Samples8 => (true, 7, 3),
-            Averaging::Samples16 => (true, 15, 4),
-            Averaging::Samples32 => (true, 31, 5),
-            Averaging::Samples64 => (true, 63, 6),
-            Averaging::Samples128 => (true, 127, 7),
-            Averaging::Samples256 => (true, 255, 8),
-            Averaging::Samples512 => (true, 511, 9),
-            Averaging::Samples1024 => (true, 1023, 10),
-        };
-
-        T::regs().cfgr2().modify(|reg| {
-            reg.set_rovse(enable);
-            reg.set_osvr(samples);
-            reg.set_ovss(right_shift);
-        })
     }
 
     /// Perform a single conversion.
