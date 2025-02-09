@@ -1,13 +1,10 @@
-use pac::adc::vals::{Adcaldif, Boost, Scandir};
+use pac::adc::vals::Scandir;
 #[allow(unused)]
-use pac::adc::vals::{Adstp, Difsel, Dmngt, Exten, Pcsel};
+use pac::adc::vals::{Adstp, Dmacfg, Exten};
 use pac::adccommon::vals::Presc;
 
-use super::{
-    blocking_delay_us, Adc, AdcChannel, AnyAdcChannel, Instance, Resolution, RxDma, SampleTime, SealedAdcChannel,
-};
+use super::{blocking_delay_us, Adc, AdcChannel, Instance, Resolution, RxDma, SealedAdcChannel};
 use crate::dma::Transfer;
-use crate::time::Hertz;
 use crate::{pac, rcc, Peripheral};
 
 /// Default VREF voltage used for sample conversion to millivolts.
@@ -15,14 +12,12 @@ pub const VREF_DEFAULT_MV: u32 = 3300;
 /// VREF voltage used for factory calibration of VREFINTCAL register.
 pub const VREF_CALIB_MV: u32 = 3300;
 
-/// Max single ADC operation clock frequency
-/// TODO(chudsaviet): Verify max C0 ADC clock frequency. Derived from RCC, could be wrong.
-const MAX_ADC_CLK_FREQ: Hertz = Hertz::mhz(48);
-
 const VREF_CHANNEL: u8 = 10;
 const TEMP_CHANNEL: u8 = 9;
 
-// NOTE: Vrefint/Temperature/Vbat are not available on all ADCs, this currently cannot be modeled with stm32-data, so these are available from the software on all ADCs
+// NOTE: Vrefint/Temperature/Vbat are not available on all ADCs,
+// this currently cannot be modeled with stm32-data,
+// so these are available from the software on all ADCs.
 /// Internal voltage reference channel.
 pub struct VrefInt;
 impl<T: Instance> AdcChannel<T> for VrefInt {}
@@ -38,15 +33,6 @@ impl<T: Instance> AdcChannel<T> for Temperature {}
 impl<T: Instance> SealedAdcChannel<T> for Temperature {
     fn channel(&self) -> u8 {
         TEMP_CHANNEL
-    }
-}
-
-/// Internal battery voltage channel.
-pub struct Vbat;
-impl<T: Instance> AdcChannel<T> for Vbat {}
-impl<T: Instance> SealedAdcChannel<T> for Vbat {
-    fn channel(&self) -> u8 {
-        VBAT_CHANNEL
     }
 }
 
@@ -69,20 +55,6 @@ enum Prescaler {
 }
 
 impl Prescaler {
-    fn from_ker_ck(frequency: Hertz) -> Self {
-        let raw_prescaler = frequency.0 / MAX_ADC_CLK_FREQ.0;
-        match raw_prescaler {
-            0 => Self::NotDivided,
-            1 => Self::DividedBy2,
-            2..=3 => Self::DividedBy4,
-            4..=5 => Self::DividedBy6,
-            6..=7 => Self::DividedBy8,
-            8..=9 => Self::DividedBy10,
-            10..=11 => Self::DividedBy12,
-            _ => unimplemented!(),
-        }
-    }
-
     fn divisor(&self) -> u32 {
         match self {
             Prescaler::NotDivided => 1,
@@ -139,34 +111,11 @@ impl<'d, T: Instance> Adc<'d, T> {
         embassy_hal_internal::into_ref!(adc);
         rcc::enable_and_reset::<T>();
 
-        let prescaler = Prescaler::from_ker_ck(T::frequency());
+        T::common_regs()
+            .ccr()
+            .modify(|w| w.set_presc(Prescaler::NotDivided.presc()));
 
-        T::common_regs().ccr().modify(|w| w.set_presc(prescaler.presc()));
-
-        let frequency = Hertz(T::frequency().0 / prescaler.divisor());
-        info!("ADC frequency set to {} Hz", frequency.0);
-
-        if frequency > MAX_ADC_CLK_FREQ {
-            panic!("Maximal allowed frequency for the ADC is {} MHz and it varies with different packages, refer to ST docs for more information.", MAX_ADC_CLK_FREQ.0 /  1_000_000 );
-        }
-
-        #[cfg(stm32h7)]
-        {
-            let boost = if frequency < Hertz::khz(6_250) {
-                Boost::LT6_25
-            } else if frequency < Hertz::khz(12_500) {
-                Boost::LT12_5
-            } else if frequency < Hertz::mhz(25) {
-                Boost::LT25
-            } else {
-                Boost::LT50
-            };
-            T::regs().cr().modify(|w| w.set_boost(boost));
-        }
-        let mut s = Self {
-            adc,
-            sample_time: SampleTime::from_bits(0),
-        };
+        let mut s = Self { adc };
         s.power_up();
 
         s.calibrate();
@@ -201,7 +150,7 @@ impl<'d, T: Instance> Adc<'d, T> {
 
     fn configure(&mut self) {
         // single conversion mode, software trigger
-        T::regs().cfgr().modify(|w| {
+        T::regs().cfgr1().modify(|w| {
             w.set_cont(false);
             w.set_exten(Exten::DISABLED);
         });
@@ -224,26 +173,6 @@ impl<'d, T: Instance> Adc<'d, T> {
 
         Temperature {}
     }
-
-    /// Enable reading the vbat internal channel.
-    pub fn enable_vbat(&self) -> Vbat {
-        T::common_regs().ccr().modify(|reg| {
-            reg.set_vbaten(true);
-        });
-
-        Vbat {}
-    }
-
-    /// Set the ADC sample time.
-    pub fn set_sample_time(&mut self, sample_time: SampleTime) {
-        self.sample_time = sample_time;
-    }
-
-    /// Get the ADC sample time.
-    pub fn sample_time(&self) -> SampleTime {
-        self.sample_time
-    }
-
     /// Set the ADC resolution.
     pub fn set_resolution(&mut self, resolution: Resolution) {
         T::regs().cfgr1().modify(|reg| reg.set_res(resolution.into()));
@@ -345,20 +274,13 @@ impl<'d, T: Instance> Adc<'d, T> {
         });
     }
 
-    fn configure_channel(channel: &mut impl AdcChannel<T>, sample_time: SampleTime) {
+    fn configure_channel(channel: &mut impl AdcChannel<T>) {
         channel.setup();
-        let channel_num: u8 = channel.channel();
-        Self::set_channel_sample_time(channel_num, sample_time);
     }
 
     fn read_channel(&mut self, channel: &mut impl AdcChannel<T>) -> u16 {
-        Self::configure_channel(channel, self.sample_time);
+        Self::configure_channel(channel);
         self.convert()
-    }
-
-    fn set_channel_sample_time(ch: u8, sample_time: SampleTime) {
-        let sample_time = sample_time.into();
-        T::regs().smpr().modify(|reg| reg.set_smp(ch as _, sample_time));
     }
 
     fn cancel_conversions() {
