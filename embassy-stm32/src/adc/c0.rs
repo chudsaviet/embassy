@@ -434,38 +434,18 @@ impl<'d, T: Instance> Adc<'d, T> {
 
     fn configure_channel(channel: &mut impl AdcChannel<T>, sample_time: SampleTime) {
         channel.setup();
-
-        let channel = channel.channel();
-
-        Self::set_channel_sample_time(channel, sample_time);
-
-        #[cfg(any(stm32h7, stm32u5))]
-        {
-            T::regs().cfgr2().modify(|w| w.set_lshift(0));
-            T::regs()
-                .pcsel()
-                .modify(|w| w.set_pcsel(channel as _, Pcsel::PRESELECTED));
-        }
+        let channel_num: u8 = channel.channel();
+        Self::set_channel_sample_time(channel_num, sample_time);
     }
 
     fn read_channel(&mut self, channel: &mut impl AdcChannel<T>) -> u16 {
         Self::configure_channel(channel, self.sample_time);
-
-        T::regs().sqr1().modify(|reg| {
-            reg.set_sq(0, channel.channel());
-            reg.set_l(0);
-        });
-
         self.convert()
     }
 
     fn set_channel_sample_time(ch: u8, sample_time: SampleTime) {
         let sample_time = sample_time.into();
-        if ch <= 9 {
-            T::regs().smpr(0).modify(|reg| reg.set_smp(ch as _, sample_time));
-        } else {
-            T::regs().smpr(1).modify(|reg| reg.set_smp((ch - 10) as _, sample_time));
-        }
+        T::regs().smpr().modify(|reg| reg.set_smp(ch as _, sample_time));
     }
 
     fn cancel_conversions() {
