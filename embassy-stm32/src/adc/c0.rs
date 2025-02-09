@@ -1,5 +1,5 @@
 #[cfg(not(stm32u5))]
-use pac::adc::vals::{Adcaldif, Boost};
+use pac::adc::vals::{Adcaldif, Boost, Scandir};
 #[allow(unused)]
 use pac::adc::vals::{Adstp, Difsel, Dmngt, Exten, Pcsel};
 use pac::adccommon::vals::Presc;
@@ -265,7 +265,7 @@ impl<'d, T: Instance> Adc<'d, T> {
 
     /// Set the ADC resolution.
     pub fn set_resolution(&mut self, resolution: Resolution) {
-        T::regs().cfgr().modify(|reg| reg.set_res(resolution.into()));
+        T::regs().cfgr1().modify(|reg| reg.set_res(resolution.into()));
     }
 
     /// Set hardware averaging.
@@ -303,9 +303,7 @@ impl<'d, T: Instance> Adc<'d, T> {
             reg.set_adstart(true);
         });
 
-        while !T::regs().isr().read().eos() {
-            // spin
-        }
+        while !T::regs().isr().read().eos() {}
 
         T::regs().dr().read().0 as u16
     }
@@ -315,92 +313,26 @@ impl<'d, T: Instance> Adc<'d, T> {
         self.read_channel(channel)
     }
 
-    /// Read one or multiple ADC channels using DMA.
-    ///
-    /// `sequence` iterator and `readings` must have the same length.
-    ///
-    /// Example
-    /// ```rust,ignore
-    /// use embassy_stm32::adc::{Adc, AdcChannel}
-    ///
-    /// let mut adc = Adc::new(p.ADC1);
-    /// let mut adc_pin0 = p.PA0.degrade_adc();
-    /// let mut adc_pin2 = p.PA2.degrade_adc();
-    /// let mut measurements = [0u16; 2];
-    ///
-    /// adc.read_async(
-    ///     p.DMA2_CH0,
-    ///     [
-    ///         (&mut *adc_pin0, SampleTime::CYCLES112),
-    ///         (&mut *adc_pin2, SampleTime::CYCLES112),
-    ///     ]
-    ///     .into_iter(),
-    ///     &mut measurements,
-    /// )
-    /// .await;
-    /// defmt::info!("measurements: {}", measurements);
-    /// ```
-    pub async fn read(
-        &mut self,
-        rx_dma: &mut impl RxDma<T>,
-        sequence: impl ExactSizeIterator<Item = (&mut AnyAdcChannel<T>, SampleTime)>,
-        readings: &mut [u16],
-    ) {
-        assert!(sequence.len() != 0, "Asynchronous read sequence cannot be empty");
-        assert!(
-            sequence.len() == readings.len(),
-            "Sequence length must be equal to readings length"
-        );
-        assert!(
-            sequence.len() <= 16,
-            "Asynchronous read sequence cannot be more than 16 in length"
-        );
+    //// Set channels scanning direction.
+    pub fn set_scandir(scandir: Scandir) {
+        T::regs().cfgr1().modify(|reg| reg.set_scandir(scandir));
+    }
 
-        // Ensure no conversions are ongoing
+    /// Read one or multiple ADC channels using DMA.
+    pub async fn read(&mut self, rx_dma: &mut impl RxDma<T>, scandir: Scandir, readings: &mut [u16]) {
+        // Ensure no conversions are ongoing.
         Self::cancel_conversions();
 
-        // Set sequence length
-        T::regs().sqr1().modify(|w| {
-            w.set_l(sequence.len() as u8 - 1);
-        });
-
-        // Configure channels and ranks
-        for (i, (channel, sample_time)) in sequence.enumerate() {
-            Self::configure_channel(channel, sample_time);
-            match i {
-                0..=3 => {
-                    T::regs().sqr1().modify(|w| {
-                        w.set_sq(i, channel.channel());
-                    });
-                }
-                4..=8 => {
-                    T::regs().sqr2().modify(|w| {
-                        w.set_sq(i - 4, channel.channel());
-                    });
-                }
-                9..=13 => {
-                    T::regs().sqr3().modify(|w| {
-                        w.set_sq(i - 9, channel.channel());
-                    });
-                }
-                14..=15 => {
-                    T::regs().sqr4().modify(|w| {
-                        w.set_sq(i - 14, channel.channel());
-                    });
-                }
-                _ => unreachable!(),
-            }
-        }
+        Self::set_scandir(scandir);
 
         // Set continuous mode with oneshot dma.
         // Clear overrun flag before starting transfer.
-
         T::regs().isr().modify(|reg| {
             reg.set_ovr(true);
         });
-        T::regs().cfgr().modify(|reg| {
+        T::regs().cfgr1().modify(|reg| {
             reg.set_cont(true);
-            reg.set_dmngt(Dmngt::DMA_ONE_SHOT);
+            reg.set_dmacfg(Dmacfg::DMA_ONE_SHOT);
         });
 
         let request = rx_dma.request();
@@ -414,7 +346,7 @@ impl<'d, T: Instance> Adc<'d, T> {
             )
         };
 
-        // Start conversion
+        // Start conversion.
         T::regs().cr().modify(|reg| {
             reg.set_adstart(true);
         });
@@ -426,9 +358,9 @@ impl<'d, T: Instance> Adc<'d, T> {
         Self::cancel_conversions();
 
         // Reset configuration.
-        T::regs().cfgr().modify(|reg| {
+        T::regs().cfgr1().modify(|reg| {
             reg.set_cont(false);
-            reg.set_dmngt(Dmngt::from_bits(0));
+            reg.set_dmacfg(Dmacfg::from_bits(0));
         });
     }
 
