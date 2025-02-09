@@ -14,6 +14,7 @@
 #[cfg_attr(any(adc_v3, adc_g0, adc_h5, adc_u0), path = "v3.rs")]
 #[cfg_attr(any(adc_v4, adc_u5), path = "v4.rs")]
 #[cfg_attr(adc_g4, path = "g4.rs")]
+#[cfg_attr(adc_c0, path = "c0.rs")]
 mod _version;
 
 use core::marker::PhantomData;
@@ -31,6 +32,7 @@ pub mod adc4;
 pub use crate::pac::adc::vals;
 #[cfg(not(any(adc_f1, adc_f3_v2)))]
 pub use crate::pac::adc::vals::Res as Resolution;
+#[cfg(not(any(adc_c0)))]
 pub use crate::pac::adc::vals::SampleTime;
 use crate::peripherals;
 
@@ -42,7 +44,7 @@ dma_trait!(RxDma4, adc4::Instance);
 pub struct Adc<'d, T: Instance> {
     #[allow(unused)]
     adc: crate::PeripheralRef<'d, T>,
-    #[cfg(not(any(adc_f3_v2, adc_f3_v1_1)))]
+    #[cfg(not(any(adc_c0, adc_f3_v2, adc_f3_v1_1)))]
     sample_time: SampleTime,
 }
 
@@ -254,7 +256,7 @@ pub const fn resolution_to_max_count(res: Resolution) -> u32 {
         Resolution::BITS12 => (1 << 12) - 1,
         Resolution::BITS10 => (1 << 10) - 1,
         Resolution::BITS8 => (1 << 8) - 1,
-        #[cfg(any(adc_v1, adc_v2, adc_v3, adc_l0, adc_g0, adc_f3, adc_f3_v1_1, adc_h5))]
+        #[cfg(any(adc_v1, adc_v2, adc_v3, adc_l0, adc_c0, adc_g0, adc_f3, adc_f3_v1_1, adc_h5))]
         Resolution::BITS6 => (1 << 6) - 1,
         #[allow(unreachable_patterns)]
         _ => core::unreachable!(),

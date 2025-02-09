@@ -1,4 +1,3 @@
-#[cfg(not(stm32u5))]
 use pac::adc::vals::{Adcaldif, Boost, Scandir};
 #[allow(unused)]
 use pac::adc::vals::{Adstp, Difsel, Dmngt, Exten, Pcsel};
@@ -20,26 +19,8 @@ pub const VREF_CALIB_MV: u32 = 3300;
 /// TODO(chudsaviet): Verify max C0 ADC clock frequency. Derived from RCC, could be wrong.
 const MAX_ADC_CLK_FREQ: Hertz = Hertz::mhz(48);
 
-#[cfg(stm32g4)]
-const VREF_CHANNEL: u8 = 18;
-#[cfg(stm32g4)]
-const TEMP_CHANNEL: u8 = 16;
-
-#[cfg(stm32h7)]
-const VREF_CHANNEL: u8 = 19;
-#[cfg(stm32h7)]
-const TEMP_CHANNEL: u8 = 18;
-
-// TODO this should be 14 for H7a/b/35
-#[cfg(not(stm32u5))]
-const VBAT_CHANNEL: u8 = 17;
-
-#[cfg(stm32u5)]
-const VREF_CHANNEL: u8 = 0;
-#[cfg(stm32u5)]
-const TEMP_CHANNEL: u8 = 19;
-#[cfg(stm32u5)]
-const VBAT_CHANNEL: u8 = 18;
+const VREF_CHANNEL: u8 = 10;
+const TEMP_CHANNEL: u8 = 9;
 
 // NOTE: Vrefint/Temperature/Vbat are not available on all ADCs, this currently cannot be modeled with stm32-data, so these are available from the software on all ADCs
 /// Internal voltage reference channel.
