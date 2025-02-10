@@ -1,11 +1,11 @@
 use pac::adc::vals::Scandir;
 #[allow(unused)]
-use pac::adc::vals::{Adstp, Dmacfg, Exten, Ovsr};
+use pac::adc::vals::{Adstp, Ckmode, Dmacfg, Exten, Ovsr};
 use pac::adccommon::vals::Presc;
 
 use super::{blocking_delay_us, Adc, AdcChannel, Instance, Resolution, RxDma, SealedAdcChannel};
 use crate::dma::Transfer;
-use crate::{pac, Peripheral};
+use crate::{pac, rcc, Peripheral};
 
 /// Default VREF voltage used for sample conversion to millivolts.
 pub const VREF_DEFAULT_MV: u32 = 3300;
@@ -35,7 +35,7 @@ impl<T: Instance> SealedAdcChannel<T> for Temperature {
         TEMP_CHANNEL
     }
 }
-enum Prescaler {
+pub enum Prescaler {
     NotDivided,
     DividedBy2,
     DividedBy4,
@@ -105,24 +105,39 @@ pub enum Averaging {
 
 impl<'d, T: Instance> Adc<'d, T> {
     /// Create a new ADC driver.
-    pub fn new(adc: impl Peripheral<P = T> + 'd) -> Self {
+    pub fn new(adc: impl Peripheral<P = T> + 'd, prescaler: Prescaler) -> Self {
         embassy_hal_internal::into_ref!(adc);
+        rcc::enable_and_reset::<T>();
 
-        T::common_regs()
-            .ccr()
-            .modify(|w| w.set_presc(Prescaler::NotDivided.presc()));
+        info!("Setting clock source.");
+        //T::regs()::cfgr2().modify(|w| w.set_ckmode(clock_source));
+        T::regs().cfgr2().modify(|w| w.set_ckmode(Ckmode::PCLK_DIV_2));
 
+        info!("Initializing prescaler.");
+        T::common_regs().ccr().modify(|w| w.set_presc(prescaler.presc()));
+
+        info!("ADC powerup.");
         let mut s = Self { adc };
         s.power_up();
 
+        // Set auto-off to False.
+        T::regs().cfgr1().modify(|w| w.set_autoff(false));
+
+        info!("ADC calibrate.");
         s.calibrate();
         blocking_delay_us(1);
 
+        info!("ADC enable.");
         s.enable();
+        info!("ADC configure.");
         s.configure();
 
         s
     }
+
+    // fn set_clock_source(clock_source: Ckmode) {
+    //     T::regs()::cg
+    // }
 
     fn power_up(&mut self) {
         T::regs().cr().modify(|reg| {
@@ -141,8 +156,10 @@ impl<'d, T: Instance> Adc<'d, T> {
     fn enable(&mut self) {
         T::regs().isr().write(|w| w.set_adrdy(true));
         T::regs().cr().modify(|w| w.set_aden(true));
-        while !T::regs().isr().read().adrdy() {}
-        T::regs().isr().write(|w| w.set_adrdy(true));
+        while !T::regs().isr().read().adrdy() {
+            info!("adrdy wait {}", T::regs().isr().read().adrdy());
+            blocking_delay_us(500000);
+        }
     }
 
     fn configure(&mut self) {
