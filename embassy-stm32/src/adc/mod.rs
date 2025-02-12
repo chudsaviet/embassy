@@ -108,7 +108,8 @@ pub(crate) fn blocking_delay_us(us: u32) {
     adc_g0,
     adc_u0,
     adc_h5,
-    adc_u5
+    adc_u5,
+    adc_c0
 )))]
 #[allow(private_bounds)]
 pub trait Instance: SealedInstance + crate::Peripheral<P = Self> {
@@ -128,7 +129,8 @@ pub trait Instance: SealedInstance + crate::Peripheral<P = Self> {
     adc_g0,
     adc_u0,
     adc_h5,
-    adc_u5
+    adc_u5,
+    adc_c0
 ))]
 #[allow(private_bounds)]
 pub trait Instance: SealedInstance + crate::Peripheral<P = Self> + crate::rcc::RccPeripheral {
@@ -140,7 +142,7 @@ pub trait Instance: SealedInstance + crate::Peripheral<P = Self> + crate::rcc::R
 pub trait AdcChannel<T>: SealedAdcChannel<T> + Sized {
     #[allow(unused_mut)]
     fn degrade_adc(mut self) -> AnyAdcChannel<T> {
-        #[cfg(any(adc_v1, adc_c0, adc_l0, adc_v2, adc_g4, adc_v4, adc_u5))]
+        #[cfg(any(adc_v1, adc_l0, adc_v2, adc_g4, adc_v4, adc_u5))]
         self.setup();
 
         AnyAdcChannel {

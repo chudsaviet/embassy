@@ -51,6 +51,7 @@ pub enum Prescaler {
 }
 
 impl Prescaler {
+    #[allow(unused)]
     fn divisor(&self) -> u32 {
         match self {
             Prescaler::NotDivided => 1,
@@ -182,7 +183,7 @@ impl<'d, T: Instance> Adc<'d, T> {
     /// Enable reading the temperature internal channel.
     pub fn enable_temperature(&self) -> Temperature {
         T::common_regs().ccr().modify(|reg| {
-            reg.set_vsenseen(true);
+            reg.set_tsen(true);
         });
 
         Temperature {}
