@@ -3,7 +3,7 @@ use pac::adc::vals::Scandir;
 use pac::adc::vals::{Adstp, Ckmode, Dmacfg, Exten, Ovsr};
 use pac::adccommon::vals::Presc;
 
-use super::{blocking_delay_us, Adc, AdcChannel, Instance, Resolution, RxDma, SealedAdcChannel};
+use super::{blocking_delay_us, Adc, AdcChannel, Instance, Resolution, RxDma, SealedAdcChannel, SampleTime};
 use crate::dma::Transfer;
 use crate::{pac, rcc, Peripheral};
 
@@ -106,32 +106,46 @@ pub enum Averaging {
 
 impl<'d, T: Instance> Adc<'d, T> {
     /// Create a new ADC driver.
-    pub fn new(adc: impl Peripheral<P = T> + 'd, prescaler: Prescaler) -> Self {
+    pub fn new(adc: impl Peripheral<P = T> + 'd) -> Self {
         embassy_hal_internal::into_ref!(adc);
+        debug!("ADC RCC enable and reset.");
         rcc::enable_and_reset::<T>();
 
-        info!("Setting clock source.");
-        //T::regs()::cfgr2().modify(|w| w.set_ckmode(clock_source));
-        T::regs().cfgr2().modify(|w| w.set_ckmode(Ckmode::PCLK_DIV_2));
+        blocking_delay_us(1000);
 
-        info!("Initializing prescaler.");
-        T::common_regs().ccr().modify(|w| w.set_presc(prescaler.presc()));
+        debug!("Enabling ADC voltage regulator.");
+        T::regs().cr().modify(|w| w.set_advregen(true));
+        blocking_delay_us(1000);
 
-        info!("ADC powerup.");
+        debug!("Setting clock source.");
+        T::regs().cfgr2().modify(|w| w.set_ckmode(Ckmode::SYSCLK));
+        blocking_delay_us(1000);
+
+        debug!("Initializing prescaler.");
+        T::common_regs().ccr().modify(|w| w.set_presc(Presc::DIV64));
+        blocking_delay_us(1000);
+
+        debug!("ADC powerup.");
         let mut s = Self { adc };
         s.power_up();
+        blocking_delay_us(1000);
 
         // Set auto-off to False.
         T::regs().cfgr1().modify(|w| w.set_autoff(false));
+        blocking_delay_us(1000);
 
-        info!("ADC calibrate.");
+        debug!("ADC calibrate.");
         s.calibrate();
         blocking_delay_us(1);
+        blocking_delay_us(1000);
 
-        info!("ADC enable.");
+        debug!("ADC enable.");
         s.enable();
-        info!("ADC configure.");
+        blocking_delay_us(1000);
+
+        debug!("ADC configure.");
         s.configure();
+        blocking_delay_us(1000);
 
         s
     }
@@ -182,9 +196,11 @@ impl<'d, T: Instance> Adc<'d, T> {
 
     /// Enable reading the temperature internal channel.
     pub fn enable_temperature(&self) -> Temperature {
+        info!("Enablint temperature.");
         T::common_regs().ccr().modify(|reg| {
             reg.set_tsen(true);
         });
+        info!("set_tsen() returned");
 
         Temperature {}
     }
@@ -212,7 +228,12 @@ impl<'d, T: Instance> Adc<'d, T> {
 
     /// Read an ADC channel.
     pub fn blocking_read(&mut self, channel: &mut impl AdcChannel<T>) -> u16 {
-        self.read_channel(channel)
+        info!("Reading ADC.");
+        let res = self.read_channel(channel);
+
+        info!("ADC read: {}", res);
+
+        res
     }
 
     //// Set channels scanning direction.
@@ -273,6 +294,13 @@ impl<'d, T: Instance> Adc<'d, T> {
     fn read_channel(&mut self, channel: &mut impl AdcChannel<T>) -> u16 {
         Self::configure_channel(channel);
         self.convert()
+    }
+
+    fn set_channel_sample_time(ch: u8, sample_time: SampleTime) {
+        assert!(ch <= 22);
+        let sample_time = sample_time.into();
+        
+        T::regs().smpr().modify(|reg| reg.set_smpsel(ch as _, sample_time));
     }
 
     fn cancel_conversions() {
