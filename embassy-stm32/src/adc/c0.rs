@@ -1,6 +1,6 @@
 use pac::adc::vals::Scandir;
 #[allow(unused)]
-use pac::adc::vals::{Adstp, Ckmode, Dmacfg, Exten, Ovsr};
+use pac::adc::vals::{Adstp, Align, Ckmode, Dmacfg, Exten, Ovsr};
 use pac::adccommon::vals::Presc;
 
 use super::{blocking_delay_us, Adc, AdcChannel, Instance, Resolution, RxDma, SampleTime, SealedAdcChannel};
@@ -149,18 +149,15 @@ impl<'d, T: Instance> Adc<'d, T> {
     /// Create a new ADC driver.
     pub fn new(adc: impl Peripheral<P = T> + 'd, sample_time: SampleTime) -> Self {
         embassy_hal_internal::into_ref!(adc);
-        debug!("ADC RCC enable and reset.");
         rcc::enable_and_reset::<T>();
 
-        debug!("Setting clock source.");
         T::regs().cfgr2().modify(|w| w.set_ckmode(Ckmode::SYSCLK));
 
         let prescaler = Prescaler::from_ker_ck(T::frequency());
-        debug!("Initializing prescaler = {}.", prescaler);
         T::common_regs().ccr().modify(|w| w.set_presc(prescaler.presc()));
 
         let frequency = Hertz(T::frequency().0 / prescaler.divisor());
-        info!("ADC frequency set to {} Hz", frequency.0);
+        debug!("ADC frequency set to {} Hz", frequency.0);
 
         if frequency > MAX_ADC_CLK_FREQ {
             panic!("Maximal allowed frequency for the ADC is {} MHz and it varies with different packages, refer to ST docs for more information.", MAX_ADC_CLK_FREQ.0 /  1_000_000 );
@@ -171,20 +168,15 @@ impl<'d, T: Instance> Adc<'d, T> {
             sample_time: SampleTime::from_bits(0),
         };
 
-        debug!("ADC powerup.");
         s.power_up();
 
-        debug!("ADC calibrate.");
         s.calibrate();
         blocking_delay_us(1);
 
-        debug!("ADC enable.");
         s.enable();
 
-        debug!("ADC configure.");
         s.configure_default();
-        
-        debug!("Set global sample time.");
+
         s.set_sample_time_all_channels(sample_time);
 
         s
@@ -211,7 +203,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         // "It is then cleared by hardware as soon the calibration completes."
         while T::regs().cr().read().adcal() {}
 
-        debug!("ADC calibration value: {}.", T::regs().dr().read().regular_data());
+        debug!("ADC calibration value: {}.", T::regs().dr().read().data());
 
         T::regs().cfgr1().modify(|w| w.set_autoff(autoff_value));
     }
@@ -228,6 +220,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         T::regs().cfgr1().modify(|w| {
             w.set_cont(false);
             w.set_exten(Exten::DISABLED);
+            w.set_align(Align::RIGHT);
         });
     }
 
@@ -275,6 +268,9 @@ impl<'d, T: Instance> Adc<'d, T> {
             reg.set_eoc(true);
         });
 
+        // Wait for the channel selection procedure to complete.
+        //while !T::regs().isr().read().ccrdy() {}
+
         // Set single conversion mode.
         T::regs().cfgr1().modify(|w| w.set_cont(false));
 
@@ -286,7 +282,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         // Waiting for End Of Conversion (EOC).
         while !T::regs().isr().read().eoc() {}
 
-        T::regs().dr().read().regular_data() as u16
+        T::regs().dr().read().data() as u16
     }
 
     /// Read an ADC channel.
@@ -338,7 +334,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         // Ensure conversions are finished.
         Self::cancel_conversions();
 
-        // Reset configuration.
+        // Reset configuration.s
         T::regs().cfgr1().modify(|reg| {
             reg.set_cont(false);
             reg.set_dmacfg(Dmacfg::from_bits(0));
@@ -347,6 +343,11 @@ impl<'d, T: Instance> Adc<'d, T> {
 
     fn configure_channel(channel: &mut impl AdcChannel<T>) {
         channel.setup();
+        // write() because we want all other bits to be set to 0.
+        T::regs()
+            .chselr()
+            .write(|w| w.set_chsel(channel.channel().into(), true));
+        T::regs().isr().modify(|w| w.set_ccrdy(false));
     }
 
     fn read_channel(&mut self, channel: &mut impl AdcChannel<T>) -> u16 {
