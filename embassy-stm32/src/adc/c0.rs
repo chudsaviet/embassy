@@ -262,15 +262,6 @@ impl<'d, T: Instance> Adc<'d, T> {
 
     /// Perform a single conversion.
     fn convert(&mut self) -> u16 {
-        // Stop any ongoing conversion.
-        T::regs().isr().modify(|reg| {
-            reg.set_eos(true);
-            reg.set_eoc(true);
-        });
-
-        // Wait for the channel selection procedure to complete.
-        //while !T::regs().isr().read().ccrdy() {}
-
         // Set single conversion mode.
         T::regs().cfgr1().modify(|w| w.set_cont(false));
 
@@ -347,7 +338,10 @@ impl<'d, T: Instance> Adc<'d, T> {
         T::regs()
             .chselr()
             .write(|w| w.set_chsel(channel.channel().into(), true));
+
+        // Trigger and wait for the channel selection procedure to complete.
         T::regs().isr().modify(|w| w.set_ccrdy(false));
+        while !T::regs().isr().read().ccrdy() {}
     }
 
     fn read_channel(&mut self, channel: &mut impl AdcChannel<T>) -> u16 {
