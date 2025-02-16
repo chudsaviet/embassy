@@ -211,6 +211,8 @@ impl<'d, T: Instance> Adc<'d, T> {
         // "It is then cleared by hardware as soon the calibration completes."
         while T::regs().cr().read().adcal() {}
 
+        debug!("ADC calibration value: {}.", T::regs().dr().read().regular_data());
+
         T::regs().cfgr1().modify(|w| w.set_autoff(autoff_value));
     }
 
@@ -240,7 +242,7 @@ impl<'d, T: Instance> Adc<'d, T> {
 
     /// Enable reading the temperature internal channel.
     pub fn enable_temperature(&self) -> Temperature {
-        debug!("Ensure that sample time is set to more than temperature sensor T_start from the datasheet!.");
+        debug!("Ensure that sample time is set to more than temperature sensor T_start from the datasheet!");
         T::common_regs().ccr().modify(|reg| {
             reg.set_tsen(true);
         });
@@ -267,19 +269,24 @@ impl<'d, T: Instance> Adc<'d, T> {
 
     /// Perform a single conversion.
     fn convert(&mut self) -> u16 {
+        // Stop any ongoing conversion.
         T::regs().isr().modify(|reg| {
             reg.set_eos(true);
             reg.set_eoc(true);
         });
+
+        // Set single conversion mode.
+        T::regs().cfgr1().modify(|w| w.set_cont(false));
 
         // Start conversion
         T::regs().cr().modify(|reg| {
             reg.set_adstart(true);
         });
 
-        while !T::regs().isr().read().eos() {}
+        // Waiting for End Of Conversion (EOC).
+        while !T::regs().isr().read().eoc() {}
 
-        T::regs().dr().read().0 as u16
+        T::regs().dr().read().regular_data() as u16
     }
 
     /// Read an ADC channel.
