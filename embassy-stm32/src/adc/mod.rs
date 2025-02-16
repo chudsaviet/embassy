@@ -32,7 +32,6 @@ pub mod adc4;
 pub use crate::pac::adc::vals;
 #[cfg(not(any(adc_f1, adc_f3_v2)))]
 pub use crate::pac::adc::vals::Res as Resolution;
-#[cfg(not(any(adc_c0)))]
 pub use crate::pac::adc::vals::SampleTime;
 use crate::peripherals;
 
@@ -44,7 +43,7 @@ dma_trait!(RxDma4, adc4::Instance);
 pub struct Adc<'d, T: Instance> {
     #[allow(unused)]
     adc: crate::PeripheralRef<'d, T>,
-    #[cfg(not(any(adc_c0, adc_f3_v2, adc_f3_v1_1)))]
+    #[cfg(not(any(adc_f3_v2, adc_f3_v1_1)))]
     sample_time: SampleTime,
 }
 
