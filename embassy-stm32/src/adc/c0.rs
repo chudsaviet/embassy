@@ -1,10 +1,10 @@
 use pac::adc::vals::Scandir;
 #[allow(unused)]
-use pac::adc::vals::{Adstp, Align, Ckmode, Dmacfg, Exten, Ovsr};
+use pac::adc::vals::{Adstp, Align, Ckmode, Dmacfg, Exten, Ovrmod, Ovsr};
 use pac::adccommon::vals::Presc;
 
 use super::{
-    blocking_delay_us, Ovrmod, Adc, AdcChannel, AnyAdcChannel, Instance, Resolution, RxDma, SampleTime, SealedAdcChannel,
+    blocking_delay_us, Adc, AdcChannel, AnyAdcChannel, Instance, Resolution, RxDma, SampleTime, SealedAdcChannel,
 };
 use crate::dma::Transfer;
 use crate::time::Hertz;
@@ -23,6 +23,9 @@ const TEMP_CHANNEL: u8 = 9;
 const VREF_CHANNEL: u8 = 10;
 
 const NUM_ADC_CHANNELS: u8 = 22;
+const CHSELR_SQ_SIZE: usize = 8;
+const CHSELR_SQ_MAX_CHANNEL: u8 = 14;
+const CHSELR_SQ_SEQUENCE_END_MARKER: u8 = 0b1111;
 
 // NOTE: Vrefint/Temperature/Vbat are not available on all ADCs,
 // this currently cannot be modeled with stm32-data,
@@ -303,34 +306,32 @@ impl<'d, T: Instance> Adc<'d, T> {
         Self::apply_channel_conf();
     }
 
-    /// Read one or multiple ADC channels using DMA.
-    /// Readings will be ordered based on **hardware** ADC channel number and `scandir` setting.
-    /// Readings won't be in the same order as in the `set`!
-    pub async fn read(
-        &mut self,
-        rx_dma: &mut impl RxDma<T>,
-        // TODO(chudsaviet): Is there a set trait in Rust, like Collection in Python?
-        set: impl ExactSizeIterator<Item = &mut AnyAdcChannel<T>>,
-        scandir: Scandir,
-        readings: &mut [u16],
-    ) {
+    fn setup_channel_sequencer<'a>(channel_sequence: impl ExactSizeIterator<Item = &'a mut AnyAdcChannel<T>>) {
         assert!(
-            set.len() == readings.len(),
-            "Channels set length must be equal to readings length."
+            channel_sequence.len() <= CHSELR_SQ_SIZE,
+            "Seqenced read set cannot be more than {} in size.",
+            CHSELR_SQ_SIZE
         );
+        let mut last_sq_set: usize = 0;
+        T::regs().chselr_sq().write(|w| {
+            for (i, channel) in channel_sequence.enumerate() {
+                assert!(
+                    channel.channel() <= CHSELR_SQ_MAX_CHANNEL,
+                    "Sequencer only support HW channels smaller than {}.",
+                    CHSELR_SQ_MAX_CHANNEL
+                );
+                w.set_sq(i, channel.channel());
+                last_sq_set = i;
+            }
 
-        // Ensure no conversions are ongoing.
-        Self::cancel_conversions();
+            for i in (last_sq_set + 1)..CHSELR_SQ_SIZE {
+                w.set_sq(i, CHSELR_SQ_SEQUENCE_END_MARKER);
+            }
+        })
+    }
 
-        T::regs().cfgr1().modify(|reg| {
-            reg.set_scandir(scandir);
-            reg.set_align(Align::RIGHT);
-        });
-
-        // Set required channels for multi-convert.
-        self.set_multiple_chsel(set);
-
-        // Enable overrun control, so no new DMA requests will be generated until 
+    async fn dma_convert(&mut self, rx_dma: &mut impl RxDma<T>, readings: &mut [u16]) {
+        // Enable overrun control, so no new DMA requests will be generated until
         // previous DR values is read.
         T::regs().isr().modify(|reg| {
             reg.set_ovr(true);
@@ -373,6 +374,73 @@ impl<'d, T: Instance> Adc<'d, T> {
             reg.set_dmacfg(Dmacfg::from_bits(0));
             reg.set_dmaen(false);
         });
+    }
+
+    /// Read one or multiple ADC channels using DMA in hardware order.
+    /// Readings will be ordered based on **hardware** ADC channel number and `scandir` setting.
+    /// Readings won't be in the same order as in the `set`!
+    ///
+    /// In STM32C0, channels bigger than 14 cannot be read using sequencer, so you have to use
+    /// either blocking reads or use the mechanism to read in HW order (CHSELRMOD=0).
+    /// TODO(chudsaviet): externalize generic code and merge with read().
+    pub async fn read_in_hw_order(
+        &mut self,
+        rx_dma: &mut impl RxDma<T>,
+        // TODO(chudsaviet): Replace set with a u32 bit field.
+        // It's Ok since we need knowledge about HW channels anyway.
+        set: impl ExactSizeIterator<Item = &mut AnyAdcChannel<T>>,
+        scandir: Scandir,
+        readings: &mut [u16],
+    ) {
+        assert!(
+            set.len() == readings.len(),
+            "Channel sequence length must be equal to readings length."
+        );
+
+        // Ensure no conversions are ongoing.
+        Self::cancel_conversions();
+
+        T::regs().cfgr1().modify(|reg| {
+            reg.set_chselrmod(false);
+            reg.set_scandir(scandir);
+            reg.set_align(Align::RIGHT);
+        });
+
+        // Set required channels for multi-convert.
+        self.set_multiple_chsel(set);
+
+        self.dma_convert(rx_dma, readings).await
+    }
+
+    // Read ADC channels in specified order using DMA (CHSELRMOD = 1).
+    // In STM32C0, only lower 14 ADC channels can be read this way.
+    // For other channels, use `read_in_hw_order()` or blocking read.
+    pub async fn read(
+        &mut self,
+        rx_dma: &mut impl RxDma<T>,
+        channel_sequence: impl ExactSizeIterator<Item = &mut AnyAdcChannel<T>>,
+        readings: &mut [u16],
+    ) {
+        assert!(
+            channel_sequence.len() != 0,
+            "Asynchronous read channel sequence cannot be empty."
+        );
+        assert!(
+            channel_sequence.len() == readings.len(),
+            "Channel sequence length must be equal to readings length."
+        );
+
+        // Ensure no conversions are ongoing.
+        Self::cancel_conversions();
+
+        T::regs().cfgr1().modify(|reg| {
+            reg.set_chselrmod(true);
+            reg.set_align(Align::RIGHT);
+        });
+
+        Self::setup_channel_sequencer(channel_sequence);
+
+        self.dma_convert(rx_dma, readings).await
     }
 
     fn configure_channel(channel: &mut impl AdcChannel<T>) {
